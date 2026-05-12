@@ -1,29 +1,38 @@
 'use client';
 import Sidebar from '@/components/Sidebar';
 import { useApp } from '@/contexts/AppContext';
-import { CheckCircle2, Zap, ListTodo, BookOpen, TrendingUp, Kanban } from 'lucide-react';
+import { CheckCircle2, Zap, ListTodo, BookOpen, TrendingUp, Kanban, Calendar, Flame, Target } from 'lucide-react';
 import Link from 'next/link';
+import ActivityHeatmap from '@/components/ActivityHeatmap';
+import { OnTimeChart, GoalsChart, CompletionTrendChart, WeeklyReviewSummary, HabitConsistencyChart } from '@/components/DashboardCharts';
+import { startOfDay, DAY_MS, fmtRelative } from '@/lib/dateUtils';
+import { subjectProgress } from '@/lib/subject';
 
 export default function DashboardPage() {
-  const { boards, subjects, loadingBoards, loadingSubjects } = useApp();
+  const { boards, subjects, habits, goals, journal, loadingBoards, loadingSubjects } = useApp();
 
-  const allTasks = boards.flatMap(b => b.tasks || []);
-  const todo = allTasks.filter(t => t.status === 'todo').length;
-  const inProgress = allTasks.filter(t => t.status === 'in-progress').length;
-  const done = allTasks.filter(t => t.status === 'done').length;
-  const totalTopics = subjects.reduce((a, s) => a + (s.topics?.length || 0), 0);
-  const doneTopics = subjects.reduce((a, s) => a + (s.topics?.filter(t => t.status === 'done').length || 0), 0);
+  // Active = not archived. Used for current-state UI (stats, today, boards list).
+  // ALL boards/tasks (including archived) feed historical charts so deletes are
+  // not the only way to remove data from history.
+  const activeBoards = boards.filter(b => !b.archivedAt);
+  const activeTasks = activeBoards.flatMap(b => b.tasks || []);
+  const todo = activeTasks.filter(t => t.status === 'todo').length;
+  const inProgress = activeTasks.filter(t => t.status === 'in-progress').length;
+  const done = activeTasks.filter(t => t.status === 'done').length;
+  const subjectStats = subjects.map(s => subjectProgress(s));
+  const totalTopics = subjectStats.reduce((a, p) => a + p.topics.total, 0);
+  const doneTopics = subjectStats.reduce((a, p) => a + p.topics.done, 0);
 
   const stats = [
     { icon: <ListTodo size={20} />, label: 'To Do', value: todo, color: '#4f8ef7', bg: 'rgba(79,142,247,0.12)' },
     { icon: <Zap size={20} />, label: 'In Progress', value: inProgress, color: '#eab308', bg: 'rgba(234,179,8,0.12)' },
     { icon: <CheckCircle2 size={20} />, label: 'Done', value: done, color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
-    { icon: <Kanban size={20} />, label: 'Boards', value: boards.length, color: '#4f8ef7', bg: 'rgba(79,142,247,0.12)' },
+    { icon: <Kanban size={20} />, label: 'Boards', value: activeBoards.length, color: '#4f8ef7', bg: 'rgba(79,142,247,0.12)' },
     { icon: <BookOpen size={20} />, label: 'Subjects', value: subjects.length, color: '#2dd4bf', bg: 'rgba(45,212,191,0.12)' },
     { icon: <TrendingUp size={20} />, label: 'Topics Done', value: `${doneTopics}/${totalTopics}`, color: '#ec4899', bg: 'rgba(236,72,153,0.12)' },
   ];
 
-  const recentTasks = [...allTasks].sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
+  const recentTasks = [...activeTasks].sort((a, b) => b.createdAt - a.createdAt).slice(0, 6);
   const pColor = { low: 'tag-green', medium: 'tag-yellow', high: 'tag-orange', critical: 'tag-red' };
   const sLabel = { todo: 'To Do', 'in-progress': 'In Progress', done: 'Done' };
 
@@ -53,6 +62,61 @@ export default function DashboardPage() {
                 ))}
               </div>
 
+              <div className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+                <ActivityHeatmap boards={boards} habits={habits} />
+              </div>
+
+              {(() => {
+                const today = startOfDay(Date.now());
+                const todayTasks = activeBoards.flatMap(b =>
+                  (b.tasks || [])
+                    .filter(t => t.dueDate && startOfDay(t.dueDate) <= today && t.status !== 'done')
+                    .map(t => ({ ...t, _board: b }))
+                );
+                if (todayTasks.length === 0) return null;
+                return (
+                  <div className="glass-card" style={{ padding: 20, marginBottom: 20 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <h2 style={{ fontSize: 14, fontWeight: 700 }}>📅 Today & Overdue ({todayTasks.length})</h2>
+                      <Link href="/today" className="btn btn-ghost btn-sm">View all</Link>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {todayTasks.slice(0, 5).map(t => (
+                        <Link
+                          key={t.id}
+                          href={`/tasks/${t._board.id}/${t.id}`}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                            border: '1px solid var(--border)', borderRadius: 8, textDecoration: 'none', color: 'var(--text-primary)', fontSize: 13,
+                          }}
+                        >
+                          <span style={{ flex: 1, fontWeight: 500 }}>{t.title}</span>
+                          <span className={`tag ${pColor[t.priority]}`} style={{ fontSize: 10 }}>{t.priority}</span>
+                          <span className="tag tag-gray" style={{ fontSize: 10 }}>{fmtRelative(t.dueDate)}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t._board.name}</span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Insight charts */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20, marginBottom: 20 }}>
+                <OnTimeChart boards={boards} />
+                <GoalsChart goals={goals} />
+                <CompletionTrendChart boards={boards} />
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <HabitConsistencyChart habits={habits} />
+              </div>
+
+              {/* Weekly review surfaced */}
+              <div style={{ marginBottom: 20 }}>
+                <WeeklyReviewSummary entries={journal} />
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                 {/* Recent Tasks */}
                 <div className="glass-card" style={{ padding: 20 }}>
@@ -77,9 +141,10 @@ export default function DashboardPage() {
                   </div>
                   {subjects.length === 0 && <div className="empty-state"><div className="empty-state-icon">📚</div><h3>No subjects yet</h3></div>}
                   {subjects.map(s => {
-                    const t = s.topics?.length || 0;
-                    const d = s.topics?.filter(x => x.status === 'done').length || 0;
-                    const pct = t ? Math.round((d / t) * 100) : 0;
+                    const prog = subjectProgress(s);
+                    const t = prog.topics.total;
+                    const d = prog.topics.done;
+                    const pct = prog.pct;
                     return (
                       <div key={s.id} style={{ marginBottom: 16 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -97,11 +162,11 @@ export default function DashboardPage() {
               </div>
 
               {/* Boards Overview */}
-              {boards.length > 0 && (
+              {activeBoards.length > 0 && (
                 <div style={{ marginTop: 20 }}>
                   <h2 style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, color: 'var(--text-secondary)' }}>Task Boards</h2>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-                    {boards.map(b => {
+                    {activeBoards.map(b => {
                       const tasks = b.tasks || [];
                       const doneCount = tasks.filter(t => t.status === 'done').length;
                       return (
